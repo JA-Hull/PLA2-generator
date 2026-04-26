@@ -12,7 +12,7 @@ import numpy as np
 from generate_pla2 import (
     parse_fasta, load_esm2_model, predict_contacts_esm2,
     binarize_contacts, build_psfm, find_catalytic_motif,
-    get_active_site_positions, AA_TO_IDX, IDX_TO_AA, BLOSUM90_POSITIVE,
+    get_key_positions, AA_TO_IDX, IDX_TO_AA, BLOSUM90_POSITIVE,
     CATALYTIC_MOTIF_RE,
 )
 
@@ -46,7 +46,7 @@ def select_diverse_subset(sequences, n=50, seed=42):
 
 # --- Per-sequence contact profiling ---
 
-def build_contact_frequency_model(sequences, contact_maps, min_sep=6):
+def build_contact_frequency_model(sequences, contact_maps, min_sep=1):
     """Mean binary contact map and, per (i,j) with |i-j|>=min_sep, 20x20 AA^2
     counts from sequences that actually have that contact."""
     n_seqs = len(sequences)
@@ -99,6 +99,45 @@ def contact_score(seq, contact_freq, pair_aa_counts):
                 satisfied_weight += freq
                 break
     return satisfied_weight / total_weight if total_weight > 0 else 1.0
+
+
+def pseudo_log_likelihood(seq, psfm, contact_freq, pair_aa_counts):
+    """Pseudo-log-likelihood: sum of log conditional probabilities at each position.
+
+    For each position, computes the probability the Gibbs model assigns to
+    the actual amino acid given all its neighbors' current values (PSFM base
+    probability × contact compatibility penalties), then takes the log.
+    Summing over all positions gives a joint score from the generative model.
+    """
+    L = len(seq)
+    neighbors = {i: [] for i in range(L)}
+    for (i, j), counts in pair_aa_counts.items():
+        freq = contact_freq[i, j]
+        if freq > 0:
+            neighbors[i].append((j, freq, counts))
+            neighbors[j].append((i, freq, counts))
+
+    total_ll = 0.0
+    for pos in range(L):
+        probs = psfm[pos].copy()
+        for aa_idx in range(20):
+            penalty = 1.0
+            for nb, freq, counts in neighbors[pos]:
+                nb_idx = AA_TO_IDX.get(seq[nb])
+                if nb_idx is None:
+                    continue
+                if not _is_compatible(counts, aa_idx, nb_idx, pos, nb):
+                    penalty *= (1.0 - freq)
+            probs[aa_idx] *= penalty
+        total = probs.sum()
+        if total > 0:
+            probs /= total
+        aa_idx = AA_TO_IDX.get(seq[pos])
+        if aa_idx is not None and probs[aa_idx] > 0:
+            total_ll += np.log(probs[aa_idx])
+        else:
+            total_ll += -20.0  # floor for unsupported residues
+    return total_ll
 
 # --- Gibbs sampler ---
 
@@ -167,7 +206,7 @@ def gibbs_sample(psfm, contact_freq, pair_aa_counts,
 def main():
     input_fasta = "data/natural_pla2_domains.fasta"
     output_fasta = "output/generated.fasta"
-    n_contact_subset = 50
+    n_contact_subset = None  # None = use all sequences for ESM2 contacts
     n_generate = 30
     rng = np.random.default_rng(42)
 
@@ -188,9 +227,11 @@ def main():
     if motif_off is None:
         print("ERROR: DxxxxxHD motif not found")
         sys.exit(1)
-    active_site = get_active_site_positions(motif_off)
+    ca_binding, catalytic = get_key_positions(motif_off, ref_seq)
+    conserved = ca_binding | catalytic
     print(
-        f"  motif {ref_seq[motif_off:motif_off+8]}  active_site={sorted(active_site)}"
+        f"  motif {ref_seq[motif_off:motif_off+8]}  "
+        f"Ca-binding={sorted(ca_binding)}  catalytic={sorted(catalytic)}"
     )
 
     # 2. PSFM
@@ -198,15 +239,20 @@ def main():
     psfm = build_psfm(all_seqs)
     n_var = sum(1 for j in range(L) if np.max(psfm[j]) < 0.95)
     print(f"  variable {n_var}/{L}")
-    for pos in sorted(active_site):
+    for pos in sorted(conserved):
         p = np.argmax(psfm[pos])
+        label = "cat" if pos in catalytic else "Ca"
         print(
-            f"  AS {pos}: {IDX_TO_AA[p]} ({np.max(psfm[pos]):.0%})"
+            f"  {label} {pos}: {IDX_TO_AA[p]} ({np.max(psfm[pos]):.0%})"
         )
 
-    # 3. Diverse subset
-    print(f"\nDiverse subset n={n_contact_subset} for ESM2")
-    subset_idx = select_diverse_subset(all_seqs, n=n_contact_subset)
+    # 3. Select sequences for ESM2 contacts
+    if n_contact_subset is None or n_contact_subset >= len(all_seqs):
+        subset_idx = list(range(len(all_seqs)))
+        print(f"\nUsing all {len(subset_idx)} sequences for ESM2 contacts")
+    else:
+        print(f"\nDiverse subset n={n_contact_subset} for ESM2")
+        subset_idx = select_diverse_subset(all_seqs, n=n_contact_subset)
     if ref_idx not in subset_idx:
         subset_idx[0] = ref_idx
     subset_seqs = [all_seqs[i] for i in subset_idx]
@@ -256,7 +302,7 @@ def main():
 
     # 7. Check
     n_as_bad = sum(
-        1 for seq in novel_seqs for pos in active_site if seq[pos] != ref_seq[pos]
+        1 for seq in novel_seqs for pos in conserved if seq[pos] != ref_seq[pos]
     )
     n_motif = sum(1 for seq in novel_seqs if CATALYTIC_MOTIF_RE.search(seq))
     print(
@@ -272,15 +318,24 @@ def main():
         print(
             f"  contact score: {np.mean(scs):.3f}  min {np.min(scs):.3f}"
         )
+        plls = [pseudo_log_likelihood(s, psfm, contact_freq, pair_aa_counts) for s in novel_seqs]
+        ref_pll = pseudo_log_likelihood(ref_seq, psfm, contact_freq, pair_aa_counts)
+        print(
+            f"  pseudo-LL: {np.mean(plls):.1f}  "
+            f"[{np.min(plls):.1f}, {np.max(plls):.1f}]  "
+            f"(AAV9: {ref_pll:.1f})"
+        )
 
     # 8. Write
     with open(output_fasta, "w") as f:
-        f.write(f">AAV9_PLA2_reference\n{ref_seq}\n")
+        ref_pll = pseudo_log_likelihood(ref_seq, psfm, contact_freq, pair_aa_counts)
+        f.write(f">AAV9_PLA2_reference|pll={ref_pll:.1f}\n{ref_seq}\n")
         for i, seq in enumerate(novel_seqs):
             iden = sum(a == b for a, b in zip(seq, ref_seq)) / L
             sc = contact_score(seq, contact_freq, pair_aa_counts)
+            pll = pseudo_log_likelihood(seq, psfm, contact_freq, pair_aa_counts)
             f.write(
-                f">generated_PLA2_{i+1:03d}|id={iden:.2f}|cs={sc:.3f}\n{seq}\n"
+                f">generated_PLA2_{i+1:03d}|id={iden:.2f}|cs={sc:.3f}|pll={pll:.1f}\n{seq}\n"
             )
     print(f"\nWrote {len(novel_seqs) + 1} -> {output_fasta}")
 

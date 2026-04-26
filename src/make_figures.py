@@ -18,7 +18,7 @@ from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 
 from generate_pla2 import (
     parse_fasta, load_esm2_model, predict_contacts_esm2,
-    binarize_contacts, find_catalytic_motif, get_active_site_positions,
+    binarize_contacts, find_catalytic_motif, get_key_positions,
     BLOSUM90, AA_TO_IDX,
 )
 
@@ -49,7 +49,7 @@ def pairwise_similarity(seq_a, seq_b):
     return n / len(seq_a) * 100
 
 
-def jaccard_binary(a, b, min_sep=6):
+def jaccard_binary(a, b, min_sep=1):
     L = a.shape[0]
     mask = np.triu(np.ones((L, L), dtype=bool), k=min_sep)
     af, bf = a[mask].astype(bool), b[mask].astype(bool)
@@ -77,15 +77,20 @@ def _cbar_labeled(fig, im, ax, ylabel, tick, shrink=0.72):
     return cb
 
 
-def _active_site_lines(ax, active_site):
-    style = dict(color="#27ae60", linewidth=0.6, alpha=0.6, linestyle="--")
-    for p in sorted(active_site):
-        ax.axvline(p, **style)
-        ax.axhline(p, **style)
+def _key_position_lines(ax, ca_binding, catalytic):
+    ca_style = dict(color="#2980b9", linewidth=0.6, alpha=0.5, linestyle=":")
+    cat_style = dict(color="#c0392b", linewidth=0.8, alpha=0.6, linestyle="--")
+    for p in sorted(ca_binding):
+        ax.axvline(p, **ca_style)
+        ax.axhline(p, **ca_style)
+    for p in sorted(catalytic):
+        ax.axvline(p, **cat_style)
+        ax.axhline(p, **cat_style)
 
 
-def plot_frequency_map(contact_freq, contacts_per_pos, active_site, filepath):
+def plot_frequency_map(contact_freq, contacts_per_pos, ca_binding, catalytic, filepath):
     L = contact_freq.shape[0]
+    conserved = ca_binding | catalytic
     fig, axes = plt.subplots(1, 2, figsize=(13, 6),
                              gridspec_kw={"width_ratios": [1, 0.5], "wspace": 0.08})
     ax = axes[0]
@@ -96,8 +101,7 @@ def plot_frequency_map(contact_freq, contacts_per_pos, active_site, filepath):
                    interpolation="nearest", vmin=0, vmax=1)
     _cbar_labeled(fig, im, ax,
                   "Contact frequency\n(fraction of input sequences)", 8)
-    as_list = sorted(active_site)
-    _active_site_lines(ax, as_list)
+    _key_position_lines(ax, ca_binding, catalytic)
     n_pairs = int(np.sum(contact_freq[mask_upper] > 0))
     ax.set_xlabel("Residue position (PLA2 domain)", fontsize=10)
     ax.set_ylabel("Residue position (PLA2 domain)", fontsize=10)
@@ -111,11 +115,13 @@ def plot_frequency_map(contact_freq, contacts_per_pos, active_site, filepath):
     ax.legend(handles=[
         Patch(facecolor="#990000", label="High frequency"),
         Patch(facecolor="#fdd49e", label="Low frequency"),
-        Patch(facecolor="none", edgecolor="#27ae60", linestyle="--",
-              label=f"Active site ({','.join(str(p) for p in as_list)})"),
+        Patch(facecolor="none", edgecolor="#c0392b", linestyle="--",
+              label=f"Catalytic dyad ({','.join(str(p) for p in sorted(catalytic))})"),
+        Patch(facecolor="none", edgecolor="#2980b9", linestyle=":",
+              label=f"Ca²⁺-binding ({','.join(str(p) for p in sorted(ca_binding))})"),
     ], loc="lower right", fontsize=7.5, framealpha=0.95, edgecolor="#cccccc")
     ax2, positions = axes[1], np.arange(L)
-    bar_colors = ["#c0392b" if p in active_site else "#2980b9" for p in positions]
+    bar_colors = ["#c0392b" if p in catalytic else "#2980b9" if p in ca_binding else "#7f8c8d" for p in positions]
     ax2.barh(positions, contacts_per_pos, color=bar_colors, edgecolor="none",
              height=0.75, alpha=0.85)
     ax2.set_ylim(-0.5, L - 0.5)
@@ -135,29 +141,29 @@ def plot_frequency_map(contact_freq, contacts_per_pos, active_site, filepath):
 
 # --- Individual contact maps ---
 
-def plot_single_contact(cmap_raw, cmap_bin, contact_freq, name, seq, ref_seq, active_site, filepath):
+def plot_single_contact(cmap_raw, cmap_bin, contact_freq, name, seq, ref_seq, ca_binding, catalytic, filepath):
     L = cmap_raw.shape[0]
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6),
-                             gridspec_kw={"width_ratios": [1.1, 1]})
-    ax = axes[0]
+    fig = plt.figure(figsize=(14, 7.5))
+    gs = fig.add_gridspec(2, 2, height_ratios=[1, 0.06], width_ratios=[1.1, 1],
+                          hspace=0.25, wspace=0.05)
+    ax = fig.add_subplot(gs[0, 0])
+    ax_legend = fig.add_subplot(gs[1, :])
+    ax2 = fig.add_subplot(gs[0, 1])
+
     mask_upper, display = _upper_tri_nan(cmap_raw, L, k=1)
     vmax = np.percentile(cmap_raw[mask_upper], 98)
     esm_cmap = LinearSegmentedColormap.from_list(
         "esm", ["#ffffff", "#fff7bc", "#fec44f", "#d95f0e", "#993404"])
     im = ax.imshow(display, cmap=esm_cmap, aspect="equal",
                    interpolation="nearest", vmin=0, vmax=vmax)
-    _cbar_labeled(fig, im, ax, "ESM2 contact score\n(APC-corrected)", 7)
+    _cbar_labeled(fig, im, ax, "ESM2 contact probability", 7)
     mask_lower = np.tril(np.ones((L, L), dtype=bool), k=-1)
     bdisp = np.full((L, L), np.nan)
     bdisp[mask_lower & (cmap_bin > 0)] = 1
     ax.imshow(bdisp, cmap=ListedColormap(["#2980b9"]), aspect="equal",
               interpolation="nearest", alpha=0.35)
-    high_freq = np.argwhere(np.triu(contact_freq, k=1) > 0.5)
-    if len(high_freq) > 0:
-        ax.scatter(high_freq[:, 1], high_freq[:, 0], s=2.5, c="#c0392b",
-                   marker="s", alpha=0.45, linewidths=0)
-    as_list = sorted(active_site)
-    _active_site_lines(ax, as_list)
+    _key_position_lines(ax, ca_binding, catalytic)
+    conserved = sorted(ca_binding | catalytic)
     n_contacts, ident = int(cmap_bin.sum() / 2), pairwise_identity(seq, ref_seq)
     ax.set_xlabel("Residue position", fontsize=9)
     ax.set_ylabel("Residue position", fontsize=9)
@@ -167,13 +173,19 @@ def plot_single_contact(cmap_raw, cmap_bin, contact_freq, name, seq, ref_seq, ac
     ax.tick_params(labelsize=7)
     ax.xaxis.set_major_locator(mticker.MultipleLocator(10))
     ax.yaxis.set_major_locator(mticker.MultipleLocator(10))
-    ax.legend(handles=[
-        Patch(facecolor="#fec44f", label="Upper tri: ESM2 continuous"),
-        Patch(facecolor="#c0392b", alpha=0.6, label="Upper tri dots: model freq > 50%"),
-        Patch(facecolor="#2980b9", alpha=0.4, label="Lower tri: per-position binary (15%)"),
-        Patch(facecolor="none", edgecolor="#27ae60", linestyle="--", label="Active site (DxxxxxHD)"),
-    ], loc="lower right", fontsize=7, framealpha=0.95, edgecolor="#cccccc")
-    ax2 = axes[1]
+
+    # Legend below the plot
+    ax_legend.axis("off")
+    legend_patches = [
+        Patch(facecolor="#fec44f", label="Upper tri: ESM2 contact probability"),
+        Patch(facecolor="#2980b9", alpha=0.4, label="Lower tri: per-position binary contacts (top 15%)"),
+        Patch(facecolor="none", edgecolor="#c0392b", linestyle="--", label="Catalytic dyad (H, D in HAD)"),
+        Patch(facecolor="none", edgecolor="#2980b9", linestyle=":", label="Ca²⁺-binding loop (DxxxxxHD Ds)"),
+    ]
+    ax_legend.legend(handles=legend_patches, loc="center", ncol=3, fontsize=8,
+                     framealpha=0.95, edgecolor="#cccccc")
+
+    # Right panel: sequence annotation
     ax2.axis("off")
     n_mut, simil = sum(1 for a, b in zip(seq, ref_seq) if a != b), pairwise_similarity(seq, ref_seq)
     match_str = "".join("|" if a == b else "." for a, b in zip(seq, ref_seq))
@@ -188,13 +200,12 @@ def plot_single_contact(cmap_raw, cmap_bin, contact_freq, name, seq, ref_seq, ac
         f"  Query: {seq}\n"
         f"  Match: {match_str}\n"
         f"\n"
-        f"  Active site: {as_list}\n"
-        f"    = {' '.join(ref_seq[p] for p in as_list)}  "
-        f"(DxxxxxHD: {seq[as_list[0]:as_list[-1]+1]})")
+        f"  Ca²⁺-binding: {sorted(ca_binding)} = {' '.join(ref_seq[p] for p in sorted(ca_binding))}\n"
+        f"  Catalytic:    {sorted(catalytic)} = {' '.join(ref_seq[p] for p in sorted(catalytic))}\n"
+        f"  DxxxxxHD: {seq[min(ca_binding):max(ca_binding)+1]}")
     ax2.text(0.02, 0.96, text, transform=ax2.transAxes, fontsize=7.5, fontfamily="monospace",
              verticalalignment="top",
              bbox=dict(boxstyle="round,pad=0.6", facecolor="#fafafa", edgecolor="#d0d0d0", linewidth=0.6))
-    plt.tight_layout()
     plt.savefig(filepath, dpi=250, bbox_inches="tight", facecolor="white")
     plt.close()
 
@@ -234,7 +245,7 @@ def main():
     if motif_off is None:
         print("ERROR: No DxxxxxHD motif")
         return
-    active_site = get_active_site_positions(motif_off)
+    ca_binding, catalytic = get_key_positions(motif_off, ref_seq)
     gen_pairs = [(n.split("|")[0], s) for n, s in parse_fasta("output/generated.fasta")
                    if "reference" not in n]
     gen_seqs = [s for _, s in gen_pairs]
@@ -244,7 +255,7 @@ def main():
           f"[{contacts_per_pos.min():.0f}–{contacts_per_pos.max():.0f}], "
           f"median={np.median(contacts_per_pos):.0f}")
     print("\nFigure 1: Contact frequency model")
-    plot_frequency_map(contact_freq, contacts_per_pos, active_site,
+    plot_frequency_map(contact_freq, contacts_per_pos, ca_binding, catalytic,
                        os.path.join(OUTDIR, "contact_frequency_model.png"))
     key_idx = _select_diverse(
         [(i, pairwise_identity(s, ref_seq)) for i, s in enumerate(all_seqs)], 12, ref_idx)
@@ -274,7 +285,7 @@ def main():
         tag = "generated" if viz_is_gen[i] else "natural"
         path = os.path.join(OUTDIR, f"{tag}_{safe}.png")
         plot_single_contact(raw_cmaps[i], bin_cmaps[i], contact_freq, name, seq, ref_seq,
-                            active_site, path)
+                            ca_binding, catalytic, path)
         print(f"  {path}")
     print("\nFigure 3: Pairwise comparison heatmaps")
     n_total = len(viz_names)
@@ -286,35 +297,42 @@ def main():
             sim_bl[i, j] = pairwise_similarity(viz_seqs[i], viz_seqs[j])
     labels = [f"{n[:18]} ({pairwise_identity(s, ref_seq):.0f}%)"
               for n, s in zip(viz_names, viz_seqs)]
-    fig, axes = plt.subplots(1, 3, figsize=(30, 11))
-    fig.subplots_adjust(wspace=0.38, left=0.06, right=0.99, bottom=0.26, top=0.86)
+    cmap_shared = "YlOrRd"
+    fig, axes = plt.subplots(3, 1, figsize=(12, 38))
+    fig.subplots_adjust(hspace=0.45, left=0.22, right=0.92, bottom=0.03, top=0.93)
     panels = [
-        (axes[0], sim_j, "A. Contact Map Similarity\n(Jaccard Index)", "viridis", 0, 1, ".2f", "Jaccard index"),
-        (axes[1], sim_id, "B. Sequence Identity\n(% identical residues)", "YlOrRd", 0, 100, ".0f", "% Identity"),
-        (axes[2], sim_bl, "C. Sequence Similarity\n(% BLOSUM90 >= 0)", "YlGnBu", 0, 100, ".0f", "% Similarity"),
+        (axes[0], sim_j * 100, "A. Contact Map Similarity (Jaccard Index × 100)", 0, 100, ".0f", "Jaccard × 100"),
+        (axes[1], sim_id, "B. Sequence Identity (% identical residues)", 0, 100, ".0f", "% Identity"),
+        (axes[2], sim_bl, "C. Sequence Similarity (% BLOSUM90 >= 0)", 0, 100, ".0f", "% Similarity"),
     ]
-    for ax, mat, title, cm, vmin, vmax, fmt, cbar_label in panels:
-        im = ax.imshow(mat, cmap=cm, vmin=vmin, vmax=vmax, aspect="equal", interpolation="nearest")
-        _cbar_labeled(fig, im, ax, cbar_label, 7, shrink=0.75)
+    for ax, mat, title, vmin, vmax, fmt, cbar_label in panels:
+        im = ax.imshow(mat, cmap=cmap_shared, vmin=vmin, vmax=vmax, aspect="equal", interpolation="nearest")
+        _cbar_labeled(fig, im, ax, cbar_label, 8, shrink=0.75)
         for i in range(n_total):
             for j in range(n_total):
-                c = _lum_color(mat[i, j], vmin, vmax, cm)
+                c = _lum_color(mat[i, j], vmin, vmax, cmap_shared)
                 ax.text(j, i, f"{mat[i, j]:{fmt}}", ha="center", va="center",
-                        fontsize=6, color=c, fontweight="medium")
+                        fontsize=6.5, color=c, fontweight="medium")
         ax.set_xticks(range(n_total))
-        ax.set_xticklabels(labels, fontsize=7, rotation=48, ha="right")
+        ax.set_xticklabels(labels, fontsize=8, rotation=48, ha="right")
         ax.set_yticks(range(n_total))
-        ax.set_yticklabels(labels, fontsize=7)
+        ax.set_yticklabels(labels, fontsize=8)
         ax.axhline(y=n_nat - 0.5, color="white", linewidth=3)
         ax.axvline(x=n_nat - 0.5, color="white", linewidth=3)
-        ax.text(n_nat / 2 - 0.5, -1.9, "Natural", ha="center", fontsize=8, fontweight="bold", color="#2c3e50")
-        ax.text(n_nat + len(picked_names) / 2 - 0.5, -1.9, "Generated", ha="center",
-                fontsize=8, fontweight="bold", color="#c0392b")
-        ax.set_title(title, fontsize=11, fontweight="bold", pad=22)
+        ax.set_title(title, fontsize=12, fontweight="bold", pad=18)
+        # Group labels on left margin, outside tick labels
+        ax.annotate("Natural", xy=(0, n_nat / 2 - 0.5), xycoords="data",
+                    xytext=(-70, 0), textcoords="offset points",
+                    ha="center", va="center", fontsize=9, fontweight="bold",
+                    color="#2c3e50", rotation=90)
+        ax.annotate("Generated", xy=(0, n_nat + len(picked_names) / 2 - 0.5),
+                    xycoords="data", xytext=(-70, 0), textcoords="offset points",
+                    ha="center", va="center", fontsize=9, fontweight="bold",
+                    color="#c0392b", rotation=90)
     fig.suptitle(
         "PLA2 Domain Comparison: Diverse Natural Parvoviral vs Generated Sequences\n"
         "Labels show % sequence identity to AAV9 PLA2 reference",
-        fontsize=13, fontweight="bold", y=0.995)
+        fontsize=14, fontweight="bold", y=0.97)
     plt.savefig("output/figures/similarity_heatmap.png", dpi=250, bbox_inches="tight", facecolor="white")
     plt.savefig("output/figures/similarity_heatmap.pdf", bbox_inches="tight", facecolor="white")
     print("  Saved similarity_heatmap.png and .pdf")

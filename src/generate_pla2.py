@@ -74,6 +74,8 @@ def parse_fasta(path):
     return out
 
 # --- Catalytic motif and active site ---
+HAD_RE = re.compile(r"HAD")
+
 def find_catalytic_motif(seq):
     """Find the first DxxxxxHD motif (D, five variable residues, H, D) in a sequence.
 
@@ -83,13 +85,29 @@ def find_catalytic_motif(seq):
     return m.start() if m is not None else None
 
 
-def get_active_site_positions(motif_offset):
-    """Return domain-local indices of the calcium-binding D, His, and catalytic Asp.
+def find_catalytic_dyad(seq):
+    """Find the HAD tripeptide containing the catalytic His-Asp dyad.
 
-    `motif_offset` is the 0-based index of the first D in DxxxxxHD (as from
-    `find_catalytic_motif`).
+    Returns the 0-based index of the H in HAD, or None if not found.
     """
-    return frozenset((motif_offset, motif_offset + H_OFFSET, motif_offset + D2_OFFSET))
+    m = HAD_RE.search(seq)
+    return m.start() if m is not None else None
+
+
+def get_key_positions(motif_offset, seq):
+    """Return dicts of functionally important positions.
+
+    Returns (ca_binding, catalytic) where:
+      ca_binding = positions of the two Ds in DxxxxxHD (calcium-binding loop)
+      catalytic  = positions of the catalytic His (from DxxxxxHD) and the
+                   catalytic Asp (D in the HAD dyad motif)
+    """
+    ca_binding = frozenset((motif_offset, motif_offset + D2_OFFSET))
+    catalytic = {motif_offset + H_OFFSET}  # His from DxxxxxHD
+    had_pos = find_catalytic_dyad(seq)
+    if had_pos is not None:
+        catalytic.add(had_pos + 2)  # D in HAD
+    return ca_binding, frozenset(catalytic)
 
 
 def extract_pla2_by_motif(seq, domain_len=81, upstream_of_motif=21):
@@ -115,30 +133,26 @@ def load_esm2_model(device="cpu"):
     return model.to(device).eval(), alphabet, batch_converter
 
 def predict_contacts_esm2(sequence, model, _alphabet, batch_converter, device="cpu"):
-    """Predict residue-residue contacts from ESM2 attention maps.
+    """Predict residue-residue contacts using ESM2's supervised contact head.
 
-    Extracts attention weights across all 33 layers and 20 heads,
-    applies APC (average product correction), symmetrizes, and
-    averages into an L x L contact score matrix.
+    Uses return_contacts=True which applies a trained regression head over
+    attention maps, producing L x L contact probabilities. This is more
+    accurate than raw attention averaging + manual APC.
     """
     _, _, batch_tokens = batch_converter([("query", sequence)])
     batch_tokens = batch_tokens.to(device)
     with torch.no_grad():
-        results = model(batch_tokens, repr_layers=[33], need_head_weights=True)
-    attn = results["attentions"][0]
-    attn = (attn[:, :, 1:-1, 1:-1] + attn[:, :, 1:-1, 1:-1].transpose(-1, -2)) / 2.0
-    row_m, col_m, g = attn.mean(-1, True), attn.mean(-2, True), attn.mean((-1, -2), True)
-    apc = attn - (row_m * col_m) / (g + 1e-8)
-    contact_map = apc.mean((0, 1)).cpu().numpy()
+        results = model(batch_tokens, return_contacts=True)
+    contact_map = results["contacts"][0].cpu().numpy()
     np.fill_diagonal(contact_map, 0)
     return contact_map
 
 
-def binarize_contacts(contact_map, top_fraction=0.15, min_seq_sep=6):
+def binarize_contacts(contact_map, top_fraction=0.15, min_seq_sep=1):
     """Convert continuous contact scores to a binary contact map.
 
     Per-position binarization: for each position i, take the top
-    `top_fraction` of its long-range contact scores (|i-j| >= min_seq_sep).
+    `top_fraction` of its contact scores (|i-j| >= min_seq_sep).
     This ensures every position gets roughly the same number of contacts
     (~top_fraction * eligible_partners ≈ 11 for L=81, sep=6, frac=0.15).
 
