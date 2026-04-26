@@ -347,7 +347,7 @@ def main():
     labels = [n[:25] for n in viz_names]
     cmap_shared = "YlOrRd"
     fig, axes = plt.subplots(3, 1, figsize=(12, 28))
-    fig.subplots_adjust(hspace=0.22, left=0.25, right=0.92, bottom=0.02, top=0.94)
+    fig.subplots_adjust(hspace=0.08, left=0.25, right=0.92, bottom=0.02, top=0.94)
     panels = [
         (axes[0], sim_j * 100, "A. Contact Map Similarity (Jaccard Index × 100)", 0, 100, ".0f", "Jaccard × 100"),
         (axes[1], sim_id, "B. Sequence Identity (% identical residues)", 0, 100, ".0f", "% Identity"),
