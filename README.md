@@ -41,7 +41,7 @@ When resampling position `pos`, the sampler examines every contact neighbor `nb`
 
 1. **Direct observation:** Is the exact (candidate, neighbor) AA pair observed in the training contact data for this pair of positions? If yes → **compatible**, no penalty.
 2. **BLOSUM90 wobble:** Is the candidate a BLOSUM90-positive substitution of *any* observed AA at `pos`, AND is the neighbor's current AA a BLOSUM90-positive substitution of *any* observed AA at `nb`? If yes → **compatible**, no penalty.
-3. **Incompatible:** If neither check passes, the candidate's sampling probability is multiplied by `(1 - contact_frequency)`. A contact seen in 90% of input sequences reduces probability to 0.1×, while one seen in 20% only reduces to 0.8×.
+3. **Incompatible:** If neither check passes, the candidate's sampling probability is multiplied by `(1 - contact_frequency)`. A contact seen in 90% of input sequences reduces probability to 0.1×, while one seen in 20% only reduces to 0.8×. **The author notes that in the initial implimentation, this does not occur and the chain dies needing to restart.**
 
 This is **soft enforcement** — no candidate is ever fully excluded, but structurally important contacts (high frequency) make incompatible choices exponentially unlikely through multiplicative penalties across all neighbors.
 
