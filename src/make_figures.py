@@ -297,8 +297,8 @@ def main():
             sim_bl[i, j] = pairwise_similarity(viz_seqs[i], viz_seqs[j])
     labels = [n[:18] for n in viz_names]
     cmap_shared = "YlOrRd"
-    fig, axes = plt.subplots(3, 1, figsize=(12, 34))
-    fig.subplots_adjust(hspace=0.40, left=0.25, right=0.92, bottom=0.03, top=0.93)
+    fig, axes = plt.subplots(3, 1, figsize=(12, 26))
+    fig.subplots_adjust(hspace=0.18, left=0.25, right=0.92, bottom=0.02, top=0.94)
     panels = [
         (axes[0], sim_j * 100, "A. Contact Map Similarity (Jaccard Index × 100)", 0, 100, ".0f", "Jaccard × 100"),
         (axes[1], sim_id, "B. Sequence Identity (% identical residues)", 0, 100, ".0f", "% Identity"),
