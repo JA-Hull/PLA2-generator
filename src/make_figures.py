@@ -19,7 +19,8 @@ from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 from generate_pla2 import (
     parse_fasta, load_esm2_model, predict_contacts_esm2,
     binarize_contacts, find_catalytic_motif, get_key_positions,
-    infer_catalytic_asp, BLOSUM90, AA_TO_IDX,
+    infer_catalytic_asp, get_all_active_site_positions,
+    BLOSUM90, AA_TO_IDX,
 )
 
 OUTDIR = "output/figures"
@@ -77,20 +78,24 @@ def _cbar_labeled(fig, im, ax, ylabel, tick, shrink=0.72):
     return cb
 
 
-def _key_position_lines(ax, ca_binding, catalytic):
-    ca_style = dict(color="#2980b9", linewidth=0.6, alpha=0.5, linestyle=":")
-    cat_style = dict(color="#c0392b", linewidth=0.8, alpha=0.6, linestyle="--")
-    for p in sorted(ca_binding):
-        ax.axvline(p, **ca_style)
-        ax.axhline(p, **ca_style)
-    for p in sorted(catalytic):
-        ax.axvline(p, **cat_style)
-        ax.axhline(p, **cat_style)
+def _active_site_lines(ax, sites):
+    """Draw annotation lines for all active site positions."""
+    styles = {
+        'ca_D1':  dict(color="#2980b9", linewidth=0.6, alpha=0.5, linestyle=":"),
+        'ca_D2':  dict(color="#2980b9", linewidth=0.6, alpha=0.5, linestyle=":"),
+        'cat_H':  dict(color="#c0392b", linewidth=0.8, alpha=0.6, linestyle="--"),
+        'cat_D_inferred': dict(color="#c0392b", linewidth=0.8, alpha=0.6, linestyle="--"),
+        'yxgxg':  dict(color="#27ae60", linewidth=0.6, alpha=0.5, linestyle="-."),
+        'phos_K': dict(color="#8e44ad", linewidth=0.6, alpha=0.5, linestyle="-."),
+    }
+    for key, pos in sites.items():
+        if key in styles:
+            ax.axvline(pos, **styles[key])
+            ax.axhline(pos, **styles[key])
 
 
-def plot_frequency_map(contact_freq, contacts_per_pos, ca_binding, catalytic, filepath):
+def plot_frequency_map(contact_freq, contacts_per_pos, ref_sites, filepath):
     L = contact_freq.shape[0]
-    conserved = ca_binding | catalytic
     fig, axes = plt.subplots(1, 2, figsize=(13, 6),
                              gridspec_kw={"width_ratios": [1, 0.5], "wspace": 0.08})
     ax = axes[0]
@@ -101,7 +106,7 @@ def plot_frequency_map(contact_freq, contacts_per_pos, ca_binding, catalytic, fi
                    interpolation="nearest", vmin=0, vmax=1)
     _cbar_labeled(fig, im, ax,
                   "Contact frequency\n(fraction of input sequences)", 8)
-    _key_position_lines(ax, ca_binding, catalytic)
+    _active_site_lines(ax, ref_sites)
     n_pairs = int(np.sum(contact_freq[mask_upper] > 0))
     ax.set_xlabel("Residue position (PLA2 domain)", fontsize=10)
     ax.set_ylabel("Residue position (PLA2 domain)", fontsize=10)
@@ -115,13 +120,19 @@ def plot_frequency_map(contact_freq, contacts_per_pos, ca_binding, catalytic, fi
     ax.legend(handles=[
         Patch(facecolor="#990000", label="High frequency"),
         Patch(facecolor="#fdd49e", label="Low frequency"),
-        Patch(facecolor="none", edgecolor="#c0392b", linestyle="--",
-              label=f"Catalytic dyad ({','.join(str(p) for p in sorted(catalytic))})"),
-        Patch(facecolor="none", edgecolor="#2980b9", linestyle=":",
-              label=f"Ca²⁺-binding ({','.join(str(p) for p in sorted(ca_binding))})"),
-    ], loc="lower right", fontsize=7.5, framealpha=0.95, edgecolor="#cccccc")
+        Patch(facecolor="none", edgecolor="#c0392b", linestyle="--", label="Catalytic dyad (H + D)"),
+        Patch(facecolor="none", edgecolor="#2980b9", linestyle=":", label="Ca²⁺-binding (DxxxxxHD Ds)"),
+        Patch(facecolor="none", edgecolor="#27ae60", linestyle="-.", label="YxGxG Ca²⁺ loop"),
+        Patch(facecolor="none", edgecolor="#8e44ad", linestyle="-.", label="Phospholipid-binding Lys"),
+    ], loc="lower right", fontsize=7, framealpha=0.95, edgecolor="#cccccc")
     ax2, positions = axes[1], np.arange(L)
-    bar_colors = ["#c0392b" if p in catalytic else "#2980b9" if p in ca_binding else "#7f8c8d" for p in positions]
+    all_sites = set(ref_sites.values())
+    cat_pos = {ref_sites.get('cat_H'), ref_sites.get('cat_D_inferred'), ref_sites.get('cat_D')} - {None}
+    ca_pos = {ref_sites.get('ca_D1'), ref_sites.get('ca_D2')} - {None}
+    bar_colors = ["#c0392b" if p in cat_pos else "#2980b9" if p in ca_pos
+                  else "#27ae60" if p == ref_sites.get('yxgxg')
+                  else "#8e44ad" if p == ref_sites.get('phos_K')
+                  else "#7f8c8d" for p in positions]
     ax2.barh(positions, contacts_per_pos, color=bar_colors, edgecolor="none",
              height=0.75, alpha=0.85)
     ax2.set_ylim(-0.5, L - 0.5)
@@ -141,7 +152,7 @@ def plot_frequency_map(contact_freq, contacts_per_pos, ca_binding, catalytic, fi
 
 # --- Individual contact maps ---
 
-def plot_single_contact(cmap_raw, cmap_bin, contact_freq, name, seq, ref_seq, ca_binding, catalytic, filepath):
+def plot_single_contact(cmap_raw, cmap_bin, contact_freq, name, seq, ref_seq, sites, filepath):
     L = cmap_raw.shape[0]
     fig = plt.figure(figsize=(14, 7.5))
     gs = fig.add_gridspec(2, 2, height_ratios=[1, 0.06], width_ratios=[1.1, 1],
@@ -162,8 +173,7 @@ def plot_single_contact(cmap_raw, cmap_bin, contact_freq, name, seq, ref_seq, ca
     bdisp[mask_lower & (cmap_bin > 0)] = 1
     ax.imshow(bdisp, cmap=ListedColormap(["#2980b9"]), aspect="equal",
               interpolation="nearest", alpha=0.35)
-    _key_position_lines(ax, ca_binding, catalytic)
-    conserved = sorted(ca_binding | catalytic)
+    _active_site_lines(ax, sites)
     n_contacts, ident = int(cmap_bin.sum() / 2), pairwise_identity(seq, ref_seq)
     ax.set_xlabel("Residue position", fontsize=9)
     ax.set_ylabel("Residue position", fontsize=9)
@@ -174,21 +184,43 @@ def plot_single_contact(cmap_raw, cmap_bin, contact_freq, name, seq, ref_seq, ca
     ax.xaxis.set_major_locator(mticker.MultipleLocator(10))
     ax.yaxis.set_major_locator(mticker.MultipleLocator(10))
 
-    # Legend below the plot
     ax_legend.axis("off")
     legend_patches = [
-        Patch(facecolor="#fec44f", label="Upper tri: ESM2 contact probability"),
-        Patch(facecolor="#2980b9", alpha=0.4, label="Lower tri: per-position binary contacts (top 15%)"),
-        Patch(facecolor="none", edgecolor="#c0392b", linestyle="--", label="Catalytic dyad (H, D in HAD)"),
-        Patch(facecolor="none", edgecolor="#2980b9", linestyle=":", label="Ca²⁺-binding loop (DxxxxxHD Ds)"),
+        Patch(facecolor="#fec44f", label="Upper tri: ESM2 contact prob."),
+        Patch(facecolor="#2980b9", alpha=0.4, label="Lower tri: binary contacts (top 15%)"),
+        Patch(facecolor="none", edgecolor="#c0392b", linestyle="--", label="Catalytic dyad (H + inferred D)"),
+        Patch(facecolor="none", edgecolor="#2980b9", linestyle=":", label="Ca²⁺-binding (DxxxxxHD Ds)"),
+        Patch(facecolor="none", edgecolor="#27ae60", linestyle="-.", label="YxGxG Ca²⁺ loop"),
+        Patch(facecolor="none", edgecolor="#8e44ad", linestyle="-.", label="Phospholipid-binding Lys"),
     ]
-    ax_legend.legend(handles=legend_patches, loc="center", ncol=3, fontsize=8,
+    ax_legend.legend(handles=legend_patches, loc="center", ncol=3, fontsize=7.5,
                      framealpha=0.95, edgecolor="#cccccc")
 
     # Right panel: sequence annotation
     ax2.axis("off")
     n_mut, simil = sum(1 for a, b in zip(seq, ref_seq) if a != b), pairwise_similarity(seq, ref_seq)
     match_str = "".join("|" if a == b else "." for a, b in zip(seq, ref_seq))
+
+    site_lines = []
+    if 'ca_D1' in sites and 'ca_D2' in sites:
+        d1, d2 = sites['ca_D1'], sites['ca_D2']
+        site_lines.append(f"  DxxxxxHD:     pos {d1}-{d2}  {seq[d1:d2+1]}")
+    if 'cat_H' in sites:
+        h = sites['cat_H']
+        site_lines.append(f"  Catalytic H:  pos {h}  ({seq[h]})")
+    if 'cat_D_inferred' in sites:
+        d = sites['cat_D_inferred']
+        site_lines.append(f"  Catalytic D:  pos {d}  ({seq[d]})  [contact-inferred]")
+    elif 'cat_D' in sites:
+        d = sites['cat_D']
+        site_lines.append(f"  Catalytic D:  pos {d}  ({seq[d]})  [HAD motif]")
+    if 'yxgxg' in sites:
+        y = sites['yxgxg']
+        site_lines.append(f"  YxGxG loop:   pos {y}-{y+4}  {seq[y:y+5]}")
+    if 'phos_K' in sites:
+        k = sites['phos_K']
+        site_lines.append(f"  Phos. Lys:    pos {k}  ({seq[k]})")
+
     text = (
         f"  Sequence:   {name}\n"
         f"  Length:     {L} aa\n"
@@ -200,9 +232,7 @@ def plot_single_contact(cmap_raw, cmap_bin, contact_freq, name, seq, ref_seq, ca
         f"  Query: {seq}\n"
         f"  Match: {match_str}\n"
         f"\n"
-        f"  Ca²⁺-binding: {sorted(ca_binding)} = {' '.join(ref_seq[p] for p in sorted(ca_binding))}\n"
-        f"  Catalytic:    {sorted(catalytic)} = {' '.join(ref_seq[p] for p in sorted(catalytic))}\n"
-        f"  DxxxxxHD: {seq[min(ca_binding):max(ca_binding)+1]}")
+        + "\n".join(site_lines))
     ax2.text(0.02, 0.96, text, transform=ax2.transAxes, fontsize=7.5, fontfamily="monospace",
              verticalalignment="top",
              bbox=dict(boxstyle="round,pad=0.6", facecolor="#fafafa", edgecolor="#d0d0d0", linewidth=0.6))
@@ -245,7 +275,7 @@ def main():
     if motif_off is None:
         print("ERROR: No DxxxxxHD motif")
         return
-    ca_binding, catalytic = get_key_positions(motif_off, ref_seq)
+    ref_sites = get_all_active_site_positions(ref_seq)
     gen_pairs = [(n.split("|")[0], s) for n, s in parse_fasta("output/generated.fasta")
                    if "reference" not in n]
     gen_seqs = [s for _, s in gen_pairs]
@@ -255,7 +285,7 @@ def main():
           f"[{contacts_per_pos.min():.0f}–{contacts_per_pos.max():.0f}], "
           f"median={np.median(contacts_per_pos):.0f}")
     print("\nFigure 1: Contact frequency model")
-    plot_frequency_map(contact_freq, contacts_per_pos, ca_binding, catalytic,
+    plot_frequency_map(contact_freq, contacts_per_pos, ref_sites,
                        os.path.join(OUTDIR, "contact_frequency_model.png"))
     # Named type members grouped by genus for heatmap readability
     type_members_ordered = [
@@ -308,33 +338,40 @@ def main():
         bin_cmaps.append(binarize_contacts(cmap))
     del model
 
-    # --- Catalytic Asp inference table ---
-    h_pos = motif_off + 6  # His position in the DxxxxxHD motif
-    print(f"\n{'='*72}")
-    print(f"  Inferred Catalytic Asp (strongest D→His{h_pos} contact, ±10 of pos 49)")
-    print(f"{'='*72}")
-    print(f"  {'Variant':<35s} {'Asp pos':>7s} {'Residue':>7s} {'Score':>8s}")
-    print(f"  {'-'*35} {'-'*7} {'-'*7} {'-'*8}")
+    # --- Per-sequence active site positions ---
+    all_sites = []
     for i, (name, seq) in enumerate(zip(viz_names, viz_seqs)):
-        asp_pos, asp_score = infer_catalytic_asp(seq, raw_cmaps[i], h_pos=h_pos)
+        sites = get_all_active_site_positions(seq, contact_map=raw_cmaps[i])
+        all_sites.append(sites)
+
+    # --- Catalytic Asp inference table ---
+    h_pos = motif_off + 6
+    print(f"\n{'='*80}")
+    print(f"  Inferred Active Site Residues (per-sequence)")
+    print(f"{'='*80}")
+    print(f"  {'Variant':<16s} {'DxxxxxHD':>8s} {'cat-H':>5s} {'cat-D':>5s} {'YxGxG':>7s} {'phos-K':>6s} {'D score':>8s}")
+    print(f"  {'-'*16} {'-'*8} {'-'*5} {'-'*5} {'-'*7} {'-'*6} {'-'*8}")
+    for i, (name, seq) in enumerate(zip(viz_names, viz_seqs)):
+        s = all_sites[i]
         tag = "*" if viz_is_gen[i] else " "
-        if asp_pos is not None:
-            print(f" {tag}{name:<35s} {asp_pos:>7d} {seq[asp_pos]:>7s} {asp_score:>8.3f}")
-        else:
-            print(f" {tag}{name:<35s} {'N/A':>7s} {'-':>7s} {'-':>8s}")
-    print(f"{'='*72}")
+        dxh = f"{s.get('ca_D1','?')}-{s.get('ca_D2','?')}" if 'ca_D1' in s else "N/A"
+        cat_h = str(s.get('cat_H', 'N/A'))
+        cat_d = str(s.get('cat_D_inferred', s.get('cat_D', 'N/A')))
+        yxg = f"{s['yxgxg']}-{s['yxgxg']+4}" if 'yxgxg' in s else "N/A"
+        pk = str(s.get('phos_K', 'N/A'))
+        asp_pos, asp_score = infer_catalytic_asp(seq, raw_cmaps[i], h_pos=h_pos)
+        sc = f"{asp_score:.3f}" if asp_pos is not None else "-"
+        print(f" {tag}{name:<16s} {dxh:>8s} {cat_h:>5s} {cat_d:>5s} {yxg:>7s} {pk:>6s} {sc:>8s}")
+    print(f"{'='*80}")
     print("  (* = generated sequence)\n")
 
     print(f"Figure 2: Individual contact maps → {OUTDIR}/")
     for i, (name, seq) in enumerate(zip(viz_names, viz_seqs)):
         safe = re.sub(r'[^\w\-.]', '_', name)
         tag = "generated" if viz_is_gen[i] else "natural"
-        asp_pos, _ = infer_catalytic_asp(seq, raw_cmaps[i], h_pos=h_pos)
-        asp_label = f"  [cat-Asp: pos {asp_pos}]" if asp_pos is not None else "  [cat-Asp: N/A]"
         path = os.path.join(OUTDIR, f"{tag}_{safe}.png")
         plot_single_contact(raw_cmaps[i], bin_cmaps[i], contact_freq,
-                            name + asp_label, seq, ref_seq,
-                            ca_binding, catalytic, path)
+                            name, seq, ref_seq, all_sites[i], path)
         print(f"  {path}")
     print("\nFigure 3: Pairwise comparison heatmaps")
     n_total = len(viz_names)

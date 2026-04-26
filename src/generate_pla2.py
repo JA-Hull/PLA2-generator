@@ -128,6 +128,61 @@ def infer_catalytic_asp(seq, contact_map, h_pos=27, search_range=10, ref_asp=49)
     return best_pos, best_score
 
 
+def find_yxgxg(seq):
+    """Find YxGxG calcium-binding loop motif. Returns index of Y, or None."""
+    for i in range(len(seq) - 4):
+        if seq[i] == 'Y' and seq[i + 2] == 'G' and seq[i + 4] == 'G':
+            return i
+    return None
+
+
+def find_conserved_lys(seq, motif_offset):
+    """Find conserved Lys between YxGxG and DxxxxxHD (phospholipid binding).
+
+    Searches for the first K in positions 10-20 (typical range between
+    the calcium-binding loop and the catalytic motif).
+    """
+    lo = max(0, motif_offset - 15)
+    hi = motif_offset
+    for i in range(lo, hi):
+        if seq[i] == 'K':
+            return i
+    return None
+
+
+def get_all_active_site_positions(seq, contact_map=None):
+    """Return a dict of all known PLA2 active site positions for a sequence.
+
+    Keys: 'ca_D1', 'ca_D2' (DxxxxxHD Ds), 'cat_H' (catalytic His),
+          'cat_D' (catalytic Asp from HAD or contact-inferred),
+          'yxgxg' (Y position in YxGxG), 'phos_K' (phospholipid-binding Lys)
+    """
+    positions = {}
+    motif_off = find_catalytic_motif(seq)
+    if motif_off is None:
+        return positions
+    positions['ca_D1'] = motif_off
+    positions['ca_D2'] = motif_off + D2_OFFSET
+    positions['cat_H'] = motif_off + H_OFFSET
+
+    had_pos = find_catalytic_dyad(seq)
+    if had_pos is not None:
+        positions['cat_D'] = had_pos + 2
+    if contact_map is not None:
+        asp_pos, _ = infer_catalytic_asp(
+            seq, contact_map, h_pos=motif_off + H_OFFSET)
+        if asp_pos is not None:
+            positions['cat_D_inferred'] = asp_pos
+
+    yg = find_yxgxg(seq)
+    if yg is not None:
+        positions['yxgxg'] = yg
+    pk = find_conserved_lys(seq, motif_off)
+    if pk is not None:
+        positions['phos_K'] = pk
+    return positions
+
+
 def extract_pla2_by_motif(seq, domain_len=81, upstream_of_motif=21):
     """Extract PLA2 domain aligned by the DxxxxxHD catalytic motif.
 
