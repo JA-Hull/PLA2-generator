@@ -131,7 +131,7 @@ Shows the per-pair contact frequency across 50 input sequences and per-position 
 
 For each natural and generated sequence: ESM2 continuous scores (upper triangle), per-position binary contacts (lower triangle), high-frequency model contacts (red dots), and sequence alignment with identity/similarity statistics.
 
-![AAV9 Contact Map](output/figures/natural_AAV9_AAS99264.1_.png)
+![AAV9 Contact Map](output/figures/natural_AAV9.png)
 
 ![Generated Sequence](output/figures/generated_GEN_1.png)
 
