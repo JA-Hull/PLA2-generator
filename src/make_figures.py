@@ -346,20 +346,13 @@ def main():
             sim_bl[i, j] = pairwise_similarity(viz_seqs[i], viz_seqs[j])
     labels = [n[:25] for n in viz_names]
     cmap_shared = "YlOrRd"
-    fig, axes = plt.subplots(3, 1, figsize=(14, 32))
-    fig.subplots_adjust(hspace=0.28, left=0.28, right=0.92, bottom=0.02, top=0.94)
+    fig, axes = plt.subplots(3, 1, figsize=(12, 28))
+    fig.subplots_adjust(hspace=0.22, left=0.25, right=0.92, bottom=0.02, top=0.94)
     panels = [
         (axes[0], sim_j * 100, "A. Contact Map Similarity (Jaccard Index × 100)", 0, 100, ".0f", "Jaccard × 100"),
         (axes[1], sim_id, "B. Sequence Identity (% identical residues)", 0, 100, ".0f", "% Identity"),
         (axes[2], sim_bl, "C. Sequence Similarity (% BLOSUM90 >= 0)", 0, 100, ".0f", "% Similarity"),
     ]
-    # Genus boundary positions for separator lines
-    genus_boundaries = []
-    pos = 0
-    for _, count in genus_groups:
-        pos += count
-        genus_boundaries.append(pos - 0.5)
-
     for ax, mat, title, vmin, vmax, fmt, cbar_label in panels:
         im = ax.imshow(mat, cmap=cmap_shared, vmin=vmin, vmax=vmax, aspect="equal", interpolation="nearest")
         _cbar_labeled(fig, im, ax, cbar_label, 8, shrink=0.75)
@@ -372,30 +365,11 @@ def main():
         ax.set_xticklabels(labels, fontsize=8, rotation=48, ha="right")
         ax.set_yticks(range(n_total))
         ax.set_yticklabels(labels, fontsize=8)
-        # Natural/Generated separator (thick)
         ax.axhline(y=n_nat - 0.5, color="white", linewidth=3)
         ax.axvline(x=n_nat - 0.5, color="white", linewidth=3)
-        # Genus group separators (thin)
-        for bnd in genus_boundaries[:-1]:
-            ax.axhline(y=bnd, color="white", linewidth=1.2, alpha=0.8)
-            ax.axvline(x=bnd, color="white", linewidth=1.2, alpha=0.8)
         ax.set_title(title, fontsize=12, fontweight="bold", pad=18)
-        # Genus group labels on the left
-        row_start = 0
-        for genus_name, count in genus_groups:
-            mid = row_start + count / 2 - 0.5
-            ax.annotate(genus_name, xy=(0, mid), xycoords="data",
-                        xytext=(-120, 0), textcoords="offset points",
-                        ha="center", va="center", fontsize=7, fontweight="bold",
-                        color="#2c3e50", rotation=90)
-            row_start += count
-        gen_mid = n_nat + len(picked_names) / 2 - 0.5
-        ax.annotate("Generated", xy=(0, gen_mid),
-                    xycoords="data", xytext=(-120, 0), textcoords="offset points",
-                    ha="center", va="center", fontsize=7, fontweight="bold",
-                    color="#c0392b", rotation=90)
     fig.suptitle(
-        "PLA2 Domain Comparison: Natural Parvoviral (by genus) vs Generated Sequences",
+        "PLA2 Domain Comparison: Natural Parvoviral vs Generated Sequences",
         fontsize=14, fontweight="bold", y=0.97)
     plt.savefig("output/figures/similarity_heatmap.png", dpi=250, bbox_inches="tight", facecolor="white")
     plt.savefig("output/figures/similarity_heatmap.pdf", bbox_inches="tight", facecolor="white")
