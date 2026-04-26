@@ -257,24 +257,36 @@ def main():
     print("\nFigure 1: Contact frequency model")
     plot_frequency_map(contact_freq, contacts_per_pos, ca_binding, catalytic,
                        os.path.join(OUTDIR, "contact_frequency_model.png"))
-    # Named type members spanning major parvoviral genera
-    type_members = {
-        "AAV9(AAS99264.1)": "AAV9 (Dependoparvovirus)",
-        "NP_041244.1": "AAV2 (Dependoparvovirus)",
-        "YP_068411.1": "AAV5 (Dependoparvovirus)",
-        "NP_041404.1": "MVM (Protoparvovirus)",
-        "P07299.1": "CPV (Protoparvovirus)",
-        "NP_542611.1": "B19 (Erythroparvovirus)",
-        "NP_852781.1": "GPV (Dependoparvovirus)",
-        "NP_046815.1": "AMDV (Amdoparvovirus)",
-        "NP_694840.1": "HBoV (Bocaparvovirus)",
-        "YP_009507374.1": "ChPV (Aveparvovirus)",
-        "NP_874379.2": "GmDNV (Densovirus)",
-        "YP_009111340.1": "BtPV (Dependoparvovirus)",
-    }
+    # Named type members grouped by genus for heatmap readability
+    type_members_ordered = [
+        ("AAV9(AAS99264.1)", "AAV9"),
+        ("NP_041244.1",      "AAV2"),
+        ("YP_068411.1",      "AAV5"),
+        ("NP_852781.1",      "GPV"),
+        ("YP_009111340.1",   "BtPV"),
+        ("NP_041404.1",      "MVM"),
+        ("P07299.1",         "CPV"),
+        ("NP_542611.1",      "B19"),
+        ("NP_046815.1",      "AMDV"),
+        ("NP_694840.1",      "HBoV"),
+        ("YP_009507374.1",   "ChPV"),
+        ("NP_874379.2",      "GmDNV"),
+    ]
+    genus_groups = [
+        ("Dependoparvovirus", 5),
+        ("Protoparvovirus", 2),
+        ("Erythroparvovirus", 1),
+        ("Amdoparvovirus", 1),
+        ("Bocaparvovirus", 1),
+        ("Aveparvovirus", 1),
+        ("Densovirus", 1),
+    ]
     name_to_idx = {n: i for i, n in enumerate(all_names)}
-    key_idx = [name_to_idx[k] for k in type_members if k in name_to_idx]
-    key_names = [type_members[all_names[i]] for i in key_idx]
+    key_idx, key_names = [], []
+    for acc, short in type_members_ordered:
+        if acc in name_to_idx:
+            key_idx.append(name_to_idx[acc])
+            key_names.append(short)
     key_seqs = [all_seqs[i] for i in key_idx]
 
     gen_pick = _select_diverse(
@@ -334,13 +346,20 @@ def main():
             sim_bl[i, j] = pairwise_similarity(viz_seqs[i], viz_seqs[j])
     labels = [n[:25] for n in viz_names]
     cmap_shared = "YlOrRd"
-    fig, axes = plt.subplots(3, 1, figsize=(14, 28))
-    fig.subplots_adjust(hspace=0.18, left=0.28, right=0.92, bottom=0.02, top=0.94)
+    fig, axes = plt.subplots(3, 1, figsize=(14, 32))
+    fig.subplots_adjust(hspace=0.28, left=0.28, right=0.92, bottom=0.02, top=0.94)
     panels = [
         (axes[0], sim_j * 100, "A. Contact Map Similarity (Jaccard Index × 100)", 0, 100, ".0f", "Jaccard × 100"),
         (axes[1], sim_id, "B. Sequence Identity (% identical residues)", 0, 100, ".0f", "% Identity"),
         (axes[2], sim_bl, "C. Sequence Similarity (% BLOSUM90 >= 0)", 0, 100, ".0f", "% Similarity"),
     ]
+    # Genus boundary positions for separator lines
+    genus_boundaries = []
+    pos = 0
+    for _, count in genus_groups:
+        pos += count
+        genus_boundaries.append(pos - 0.5)
+
     for ax, mat, title, vmin, vmax, fmt, cbar_label in panels:
         im = ax.imshow(mat, cmap=cmap_shared, vmin=vmin, vmax=vmax, aspect="equal", interpolation="nearest")
         _cbar_labeled(fig, im, ax, cbar_label, 8, shrink=0.75)
@@ -353,20 +372,30 @@ def main():
         ax.set_xticklabels(labels, fontsize=8, rotation=48, ha="right")
         ax.set_yticks(range(n_total))
         ax.set_yticklabels(labels, fontsize=8)
+        # Natural/Generated separator (thick)
         ax.axhline(y=n_nat - 0.5, color="white", linewidth=3)
         ax.axvline(x=n_nat - 0.5, color="white", linewidth=3)
+        # Genus group separators (thin)
+        for bnd in genus_boundaries[:-1]:
+            ax.axhline(y=bnd, color="white", linewidth=1.2, alpha=0.8)
+            ax.axvline(x=bnd, color="white", linewidth=1.2, alpha=0.8)
         ax.set_title(title, fontsize=12, fontweight="bold", pad=18)
-        ax.annotate("Natural", xy=(0, n_nat / 2 - 0.5), xycoords="data",
-                    xytext=(-140, 0), textcoords="offset points",
-                    ha="center", va="center", fontsize=9, fontweight="bold",
-                    color="#2c3e50", rotation=90)
-        ax.annotate("Generated", xy=(0, n_nat + len(picked_names) / 2 - 0.5),
-                    xycoords="data", xytext=(-140, 0), textcoords="offset points",
-                    ha="center", va="center", fontsize=9, fontweight="bold",
+        # Genus group labels on the left
+        row_start = 0
+        for genus_name, count in genus_groups:
+            mid = row_start + count / 2 - 0.5
+            ax.annotate(genus_name, xy=(0, mid), xycoords="data",
+                        xytext=(-120, 0), textcoords="offset points",
+                        ha="center", va="center", fontsize=7, fontweight="bold",
+                        color="#2c3e50", rotation=90)
+            row_start += count
+        gen_mid = n_nat + len(picked_names) / 2 - 0.5
+        ax.annotate("Generated", xy=(0, gen_mid),
+                    xycoords="data", xytext=(-120, 0), textcoords="offset points",
+                    ha="center", va="center", fontsize=7, fontweight="bold",
                     color="#c0392b", rotation=90)
     fig.suptitle(
-        "PLA2 Domain Comparison: Diverse Natural Parvoviral vs Generated Sequences\n"
-        "Labels show % sequence identity to AAV9 PLA2 reference",
+        "PLA2 Domain Comparison: Natural Parvoviral (by genus) vs Generated Sequences",
         fontsize=14, fontweight="bold", y=0.97)
     plt.savefig("output/figures/similarity_heatmap.png", dpi=250, bbox_inches="tight", facecolor="white")
     plt.savefig("output/figures/similarity_heatmap.pdf", bbox_inches="tight", facecolor="white")
