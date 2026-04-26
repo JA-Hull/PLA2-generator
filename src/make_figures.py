@@ -295,11 +295,10 @@ def main():
             sim_j[i, j] = jaccard_binary(bin_cmaps[i], bin_cmaps[j])
             sim_id[i, j] = pairwise_identity(viz_seqs[i], viz_seqs[j])
             sim_bl[i, j] = pairwise_similarity(viz_seqs[i], viz_seqs[j])
-    labels = [f"{n[:18]} ({pairwise_identity(s, ref_seq):.0f}%)"
-              for n, s in zip(viz_names, viz_seqs)]
+    labels = [n[:18] for n in viz_names]
     cmap_shared = "YlOrRd"
-    fig, axes = plt.subplots(3, 1, figsize=(12, 38))
-    fig.subplots_adjust(hspace=0.45, left=0.22, right=0.92, bottom=0.03, top=0.93)
+    fig, axes = plt.subplots(3, 1, figsize=(12, 34))
+    fig.subplots_adjust(hspace=0.40, left=0.25, right=0.92, bottom=0.03, top=0.93)
     panels = [
         (axes[0], sim_j * 100, "A. Contact Map Similarity (Jaccard Index × 100)", 0, 100, ".0f", "Jaccard × 100"),
         (axes[1], sim_id, "B. Sequence Identity (% identical residues)", 0, 100, ".0f", "% Identity"),
@@ -320,13 +319,12 @@ def main():
         ax.axhline(y=n_nat - 0.5, color="white", linewidth=3)
         ax.axvline(x=n_nat - 0.5, color="white", linewidth=3)
         ax.set_title(title, fontsize=12, fontweight="bold", pad=18)
-        # Group labels on left margin, outside tick labels
         ax.annotate("Natural", xy=(0, n_nat / 2 - 0.5), xycoords="data",
-                    xytext=(-70, 0), textcoords="offset points",
+                    xytext=(-140, 0), textcoords="offset points",
                     ha="center", va="center", fontsize=9, fontweight="bold",
                     color="#2c3e50", rotation=90)
         ax.annotate("Generated", xy=(0, n_nat + len(picked_names) / 2 - 0.5),
-                    xycoords="data", xytext=(-70, 0), textcoords="offset points",
+                    xycoords="data", xytext=(-140, 0), textcoords="offset points",
                     ha="center", va="center", fontsize=9, fontweight="bold",
                     color="#c0392b", rotation=90)
     fig.suptitle(
