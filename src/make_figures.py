@@ -19,7 +19,7 @@ from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 from generate_pla2 import (
     parse_fasta, load_esm2_model, predict_contacts_esm2,
     binarize_contacts, find_catalytic_motif, get_key_positions,
-    BLOSUM90, AA_TO_IDX,
+    infer_catalytic_asp, BLOSUM90, AA_TO_IDX,
 )
 
 OUTDIR = "output/figures"
@@ -257,12 +257,28 @@ def main():
     print("\nFigure 1: Contact frequency model")
     plot_frequency_map(contact_freq, contacts_per_pos, ca_binding, catalytic,
                        os.path.join(OUTDIR, "contact_frequency_model.png"))
-    key_idx = _select_diverse(
-        [(i, pairwise_identity(s, ref_seq)) for i, s in enumerate(all_seqs)], 12, ref_idx)
+    # Named type members spanning major parvoviral genera
+    type_members = {
+        "AAV9(AAS99264.1)": "AAV9 (Dependoparvovirus)",
+        "NP_041244.1": "AAV2 (Dependoparvovirus)",
+        "YP_068411.1": "AAV5 (Dependoparvovirus)",
+        "NP_041404.1": "MVM (Protoparvovirus)",
+        "P07299.1": "CPV (Protoparvovirus)",
+        "NP_542611.1": "B19 (Erythroparvovirus)",
+        "NP_852781.1": "GPV (Dependoparvovirus)",
+        "NP_046815.1": "AMDV (Amdoparvovirus)",
+        "NP_694840.1": "HBoV (Bocaparvovirus)",
+        "YP_009507374.1": "ChPV (Aveparvovirus)",
+        "NP_874379.2": "GmDNV (Densovirus)",
+        "YP_009111340.1": "BtPV (Dependoparvovirus)",
+    }
+    name_to_idx = {n: i for i, n in enumerate(all_names)}
+    key_idx = [name_to_idx[k] for k in type_members if k in name_to_idx]
+    key_names = [type_members[all_names[i]] for i in key_idx]
+    key_seqs = [all_seqs[i] for i in key_idx]
+
     gen_pick = _select_diverse(
         [(i, pairwise_identity(s, ref_seq)) for i, s in enumerate(gen_seqs)], 6)
-    key_names = [all_names[i] for i in key_idx]
-    key_seqs = [all_seqs[i] for i in key_idx]
     picked_names = [f"GEN_{k+1}" for k in range(len(gen_pick))]
     picked_seqs = [gen_seqs[i] for i in gen_pick]
     viz_names, viz_seqs = key_names + picked_names, key_seqs + picked_seqs
@@ -279,12 +295,33 @@ def main():
         raw_cmaps.append(cmap)
         bin_cmaps.append(binarize_contacts(cmap))
     del model
-    print(f"\nFigure 2: Individual contact maps → {OUTDIR}/")
+
+    # --- Catalytic Asp inference table ---
+    h_pos = motif_off + 6  # His position in the DxxxxxHD motif
+    print(f"\n{'='*72}")
+    print(f"  Inferred Catalytic Asp (strongest D→His{h_pos} contact, ±10 of pos 49)")
+    print(f"{'='*72}")
+    print(f"  {'Variant':<35s} {'Asp pos':>7s} {'Residue':>7s} {'Score':>8s}")
+    print(f"  {'-'*35} {'-'*7} {'-'*7} {'-'*8}")
+    for i, (name, seq) in enumerate(zip(viz_names, viz_seqs)):
+        asp_pos, asp_score = infer_catalytic_asp(seq, raw_cmaps[i], h_pos=h_pos)
+        tag = "*" if viz_is_gen[i] else " "
+        if asp_pos is not None:
+            print(f" {tag}{name:<35s} {asp_pos:>7d} {seq[asp_pos]:>7s} {asp_score:>8.3f}")
+        else:
+            print(f" {tag}{name:<35s} {'N/A':>7s} {'-':>7s} {'-':>8s}")
+    print(f"{'='*72}")
+    print("  (* = generated sequence)\n")
+
+    print(f"Figure 2: Individual contact maps → {OUTDIR}/")
     for i, (name, seq) in enumerate(zip(viz_names, viz_seqs)):
         safe = re.sub(r'[^\w\-.]', '_', name)
         tag = "generated" if viz_is_gen[i] else "natural"
+        asp_pos, _ = infer_catalytic_asp(seq, raw_cmaps[i], h_pos=h_pos)
+        asp_label = f"  [cat-Asp: pos {asp_pos}]" if asp_pos is not None else "  [cat-Asp: N/A]"
         path = os.path.join(OUTDIR, f"{tag}_{safe}.png")
-        plot_single_contact(raw_cmaps[i], bin_cmaps[i], contact_freq, name, seq, ref_seq,
+        plot_single_contact(raw_cmaps[i], bin_cmaps[i], contact_freq,
+                            name + asp_label, seq, ref_seq,
                             ca_binding, catalytic, path)
         print(f"  {path}")
     print("\nFigure 3: Pairwise comparison heatmaps")
@@ -295,10 +332,10 @@ def main():
             sim_j[i, j] = jaccard_binary(bin_cmaps[i], bin_cmaps[j])
             sim_id[i, j] = pairwise_identity(viz_seqs[i], viz_seqs[j])
             sim_bl[i, j] = pairwise_similarity(viz_seqs[i], viz_seqs[j])
-    labels = [n[:18] for n in viz_names]
+    labels = [n[:25] for n in viz_names]
     cmap_shared = "YlOrRd"
-    fig, axes = plt.subplots(3, 1, figsize=(12, 26))
-    fig.subplots_adjust(hspace=0.18, left=0.25, right=0.92, bottom=0.02, top=0.94)
+    fig, axes = plt.subplots(3, 1, figsize=(14, 28))
+    fig.subplots_adjust(hspace=0.18, left=0.28, right=0.92, bottom=0.02, top=0.94)
     panels = [
         (axes[0], sim_j * 100, "A. Contact Map Similarity (Jaccard Index × 100)", 0, 100, ".0f", "Jaccard × 100"),
         (axes[1], sim_id, "B. Sequence Identity (% identical residues)", 0, 100, ".0f", "% Identity"),

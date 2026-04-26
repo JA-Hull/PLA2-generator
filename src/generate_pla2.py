@@ -110,6 +110,24 @@ def get_key_positions(motif_offset, seq):
     return ca_binding, frozenset(catalytic)
 
 
+def infer_catalytic_asp(seq, contact_map, h_pos=27, search_range=10, ref_asp=49):
+    """Infer catalytic Asp position from contact map + sequence.
+
+    Finds the D residue within ±search_range of ref_asp (AAV9 position 49)
+    that has the strongest contact to the catalytic His at h_pos.
+    Returns (position, contact_score) or (None, 0.0) if no D found.
+    """
+    best_pos, best_score = None, 0.0
+    lo = max(0, ref_asp - search_range)
+    hi = min(len(seq), ref_asp + search_range + 1)
+    for pos in range(lo, hi):
+        if seq[pos] == 'D' and pos != h_pos:
+            score = contact_map[h_pos, pos]
+            if score > best_score:
+                best_pos, best_score = pos, score
+    return best_pos, best_score
+
+
 def extract_pla2_by_motif(seq, domain_len=81, upstream_of_motif=21):
     """Extract PLA2 domain aligned by the DxxxxxHD catalytic motif.
 
